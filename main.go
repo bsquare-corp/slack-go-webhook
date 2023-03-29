@@ -70,18 +70,34 @@ func redirectPolicyFunc(req gorequest.Request, via []gorequest.Request) error {
 
 func Send(webhookUrl string, proxy string, payload Payload) []error {
 	request := gorequest.New().Proxy(proxy)
-	resp, _, err := request.
-		Post(webhookUrl).
-		RedirectPolicy(redirectPolicyFunc).
-		Send(payload).
-		End()
 
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode >= 400 {
-		return []error{fmt.Errorf("Error sending msg. Status: %v", resp.Status)}
-	}
+	for {
+		resp, _, err := request.
+			Post(webhookUrl).
+			RedirectPolicy(redirectPolicyFunc).
+			Send(payload).
+			End()
 
-	return nil
+		if err != nil {
+			return err
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfterHeader := resp.Header.Get("Retry-After")
+			if retryAfterHeader != "" {
+				retryAfterSeconds, err := strconv.Atoi(retryAfterHeader)
+				if err != nil {
+					return []error{fmt.Errorf("Error parsing Retry-After header: %s", retryAfterHeader)}
+				}
+				time.Sleep(time.Duration(retryAfterSeconds) * time.Second)
+			} else {
+				// If Retry-After header is missing or invalid, wait for 1 second before retrying.
+				time.Sleep(1 * time.Second)
+			}
+		} else if resp.StatusCode >= 400 {
+			return []error{fmt.Errorf("Error sending msg. Status: %v", resp.Status)}
+		} else {
+			return nil
+		}
+	}
 }
