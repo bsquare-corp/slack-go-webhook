@@ -2,9 +2,12 @@ package slack
 
 import (
 	"fmt"
-  "net/http"
-  "strconv"
-  "time"
+	"net/http"
+	"os"
+	"strconv"
+	"sync"
+	"time"
+
 	"github.com/parnurzeal/gorequest"
 )
 
@@ -15,10 +18,10 @@ type Field struct {
 }
 
 type Action struct {
-	Type	string   `json:"type"`
-	Text	string   `json:"text"`
-	Url 	string   `json:"url"`
-	Style 	string   `json:"style"`
+	Type  string `json:"type"`
+	Text  string `json:"text"`
+	Url   string `json:"url"`
+	Style string `json:"style"`
 }
 
 type Attachment struct {
@@ -70,7 +73,25 @@ func redirectPolicyFunc(req gorequest.Request, via []gorequest.Request) error {
 	return fmt.Errorf("Incorrect token (redirection)")
 }
 
+var (
+	statusCodeMap    = make(map[int]int)
+	statusCodeLock   sync.Mutex
+	statusCodeTicker *time.Ticker
+)
+
 func Send(webhookUrl string, proxy string, payload Payload) []error {
+
+	if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
+		if statusCodeTicker == nil {
+			statusCodeTicker = time.NewTicker(1 * time.Minute)
+			go func() {
+				for range statusCodeTicker.C {
+					reportStatusCodes()
+				}
+			}()
+		}
+	}
+
 	request := gorequest.New().Proxy(proxy)
 
 	for {
@@ -82,6 +103,10 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 
 		if err != nil {
 			return err
+		}
+
+		if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
+			incrementStatusCode(resp.StatusCode)
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
@@ -101,5 +126,34 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 		} else {
 			return nil
 		}
+	}
+}
+
+func incrementStatusCode(code int) {
+	statusCodeLock.Lock()
+	defer statusCodeLock.Unlock()
+
+	_, ok := statusCodeMap[code]
+	if !ok {
+		statusCodeMap[code] = 1
+	} else {
+		statusCodeMap[code]++
+	}
+}
+
+func reportStatusCodes() {
+	statusCodeLock.Lock()
+	defer statusCodeLock.Unlock()
+	fmt.Printf("Slack HTTP response codes / min = %v\n", statusCodeMap)
+
+	resetStatusCodes()
+}
+
+func resetStatusCodes() {
+	statusCodeLock.Lock()
+	defer statusCodeLock.Unlock()
+
+	for code := range statusCodeMap {
+		statusCodeMap[code] = 0
 	}
 }
