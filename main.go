@@ -1,3 +1,4 @@
+// +build linux,amd64 linux,arm64 darwin
 package slack
 
 import (
@@ -83,6 +84,7 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 
 	if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
 		if statusCodeTicker == nil {
+	    fmt.Printf("Initialising status code ticker (1/min)\n")
 			statusCodeTicker = time.NewTicker(1 * time.Minute)
 			go func() {
 				for range statusCodeTicker.C {
