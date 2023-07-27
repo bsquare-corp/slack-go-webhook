@@ -1,4 +1,3 @@
-// +build linux,amd64 linux,arm64 darwin
 package slack
 
 import (
@@ -87,8 +86,9 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 	    fmt.Printf("Initialising status code ticker (1/min)\n")
 			statusCodeTicker = time.NewTicker(1 * time.Minute)
 			go func() {
-				for range statusCodeTicker.C {
-					reportStatusCodes()
+        select {
+        case t := <-statusCodeTicker.C:
+					reportStatusCodes(t)
 				}
 			}()
 		}
@@ -143,10 +143,10 @@ func incrementStatusCode(code int) {
 	}
 }
 
-func reportStatusCodes() {
+func reportStatusCodes(tick time.Time) {
 	statusCodeLock.Lock()
 	defer statusCodeLock.Unlock()
-	fmt.Printf("Slack HTTP response codes / min = %v\n", statusCodeMap)
+	fmt.Printf("Slack HTTP response codes / min = %v (tick %v)\n", statusCodeMap, tick)
 
 	resetStatusCodes()
 }
