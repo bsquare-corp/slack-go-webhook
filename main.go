@@ -79,20 +79,13 @@ var (
 	statusCodeTicker *time.Ticker
 )
 
-func Send(webhookUrl string, proxy string, payload Payload) []error {
-
+func Init() {
 	if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
-		if statusCodeTicker == nil {
-	    fmt.Printf("Initialising status code ticker (1/min)\n")
-			statusCodeTicker = time.NewTicker(1 * time.Minute)
-			go func() {
-        select {
-        case t := <-statusCodeTicker.C:
-					reportStatusCodes(t)
-				}
-			}()
-		}
+		InitialiseTicker()
 	}
+}
+
+func Send(webhookUrl string, proxy string, payload Payload) []error {
 
 	request := gorequest.New().Proxy(proxy)
 
@@ -128,6 +121,21 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 		} else {
 			return nil
 		}
+	}
+}
+
+func InitialiseTicker() {
+	statusCodeLock.Lock()
+	defer statusCodeLock.Unlock()
+
+	if statusCodeTicker == nil {
+		fmt.Printf("Initialising status code ticker (1/min)\n")
+		statusCodeTicker = time.NewTicker(1 * time.Minute)
+		go func() {
+			for t := range statusCodeTicker.C {
+				reportStatusCodes(t)
+			}
+		}()
 	}
 }
 
