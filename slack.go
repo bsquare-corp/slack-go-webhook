@@ -1,8 +1,12 @@
 package slack
 
 import (
+  "bytes"
+  "encoding/json"
 	"fmt"
+  "log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -74,9 +78,12 @@ func redirectPolicyFunc(req gorequest.Request, via []gorequest.Request) error {
 }
 
 var (
+  HttpClient = &http.Client{}
 	statusCodeMap    = make(map[int]int)
 	statusCodeLock   sync.Mutex
 	statusCodeTicker *time.Ticker
+  StatusCodeTickerInterval = time.Minute
+  StatusCodeRetryInterval = time.Minute
 )
 
 func Init() {
@@ -87,41 +94,65 @@ func Init() {
 
 func Send(webhookUrl string, proxy string, payload Payload) []error {
 
-	request := gorequest.New().Proxy(proxy)
+  log.Printf("Send(%v,%v,%v)", webhookUrl, proxy, payload)
+  payloadJson, err := json.Marshal(payload)
+  if err != nil {
+    return []error{err}
+  }
 
-	for {
-		resp, _, err := request.
-			Post(webhookUrl).
-			RedirectPolicy(redirectPolicyFunc).
-			Send(payload).
-			End()
+  if proxy != "" {
+    proxyUrl, err := url.Parse(proxy)
+    if err != nil {
+      return []error{err} 
+    }
+    HttpClient.Transport = &http.Transport{Proxy: http.ProxyURL(proxyUrl)}
+  }
 
-		if err != nil {
-			return err
-		}
+  for {
+    log.Printf("Sending...")
 
-		if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
-			incrementStatusCode(resp.StatusCode)
-		}
+    req, err := http.NewRequest("POST", webhookUrl, bytes.NewBuffer(payloadJson))
+    if err != nil {
+      log.Printf("NewRequst failure... %v", err)
+      return []error{err}
+    }
 
-		if resp.StatusCode == http.StatusTooManyRequests {
-			retryAfterHeader := resp.Header.Get("Retry-After")
-			if retryAfterHeader != "" {
-				retryAfterSeconds, err := strconv.Atoi(retryAfterHeader)
-				if err != nil {
-					return []error{fmt.Errorf("Error parsing Retry-After header: %s", retryAfterHeader)}
-				}
-				time.Sleep(time.Duration(retryAfterSeconds) * time.Second)
-			} else {
-				// If Retry-After header is missing or invalid, wait for 1 second before retrying.
-				time.Sleep(1 * time.Second)
-			}
-		} else if resp.StatusCode >= 400 {
-			return []error{fmt.Errorf("Error sending msg. Status: %v", resp.Status)}
-		} else {
-			return nil
-		}
-	}
+    resp, err := HttpClient.Do(req)
+    if err != nil {
+      log.Printf("HTTPClient.Do failure... %v", err)
+      return []error{err}
+    }
+
+    log.Printf("Sent...")
+
+    if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
+      log.Printf("Increment status Code %v", resp.StatusCode)
+      incrementStatusCode(resp.StatusCode) 
+    }
+
+    log.Printf("Check...")
+    if resp.StatusCode == http.StatusTooManyRequests {
+      retryAfterHeader := resp.Header.Get("Retry-After")
+      if retryAfterHeader != "" {
+        retryAfterSeconds, err := strconv.Atoi(retryAfterHeader)
+        if err != nil {
+          log.Printf("Response Error %v", retryAfterHeader)
+          return []error{fmt.Errorf("Error parsing Retry-After header: %s", retryAfterHeader)}
+        }
+        log.Printf("Retry on header...")
+        time.Sleep(time.Duration(retryAfterSeconds) * time.Second)
+      } else {
+        log.Printf("Retry Second...")
+        time.Sleep(StatusCodeRetryInterval) 
+      }
+    } else if resp.StatusCode >= 400 {
+      log.Printf("Response Error %v", resp.StatusCode)
+      return []error{fmt.Errorf("Error sending msg. Status: %v", resp.StatusCode)}
+    } else {
+      log.Printf("Response Status %v", resp.StatusCode)
+      return nil
+    }
+  }
 }
 
 func InitialiseTicker() {
@@ -129,11 +160,12 @@ func InitialiseTicker() {
 	defer statusCodeLock.Unlock()
 
 	if statusCodeTicker == nil {
-		fmt.Printf("Initialising status code ticker (1/min)\n")
-		statusCodeTicker = time.NewTicker(1 * time.Minute)
+		log.Printf("Initialising status code ticker (1/min)\n")
+		statusCodeTicker = time.NewTicker(StatusCodeTickerInterval)
 		go func() {
 			for t := range statusCodeTicker.C {
 				reportStatusCodes(t)
+	      resetStatusCodes()
 			}
 		}()
 	}
@@ -154,9 +186,8 @@ func incrementStatusCode(code int) {
 func reportStatusCodes(tick time.Time) {
 	statusCodeLock.Lock()
 	defer statusCodeLock.Unlock()
-	fmt.Printf("Slack HTTP response codes / min = %v (tick %v)\n", statusCodeMap, tick)
 
-	resetStatusCodes()
+	log.Printf("Slack HTTP response codes / min = %v (tick %v)\n", statusCodeMap, tick)
 }
 
 func resetStatusCodes() {
