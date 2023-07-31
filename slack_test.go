@@ -66,6 +66,6 @@ func TestSend(t *testing.T) {
     Send(url, "", payload)
   }
 
-  time.Sleep(2 * StatusCodeTickerInterval)
+  time.Sleep(3 * StatusCodeTickerInterval)
 
 }
