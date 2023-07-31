@@ -94,7 +94,6 @@ func Init() {
 
 func Send(webhookUrl string, proxy string, payload Payload) []error {
 
-  log.Printf("Send(%v,%v,%v)", webhookUrl, proxy, payload)
   payloadJson, err := json.Marshal(payload)
   if err != nil {
     return []error{err}
@@ -109,47 +108,35 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
   }
 
   for {
-    log.Printf("Sending...")
-
     req, err := http.NewRequest("POST", webhookUrl, bytes.NewBuffer(payloadJson))
     if err != nil {
-      log.Printf("NewRequst failure... %v", err)
       return []error{err}
     }
 
     resp, err := HttpClient.Do(req)
     if err != nil {
-      log.Printf("HTTPClient.Do failure... %v", err)
       return []error{err}
     }
 
-    log.Printf("Sent...")
 
     if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
-      log.Printf("Increment status Code %v", resp.StatusCode)
       incrementStatusCode(resp.StatusCode) 
     }
 
-    log.Printf("Check...")
     if resp.StatusCode == http.StatusTooManyRequests {
       retryAfterHeader := resp.Header.Get("Retry-After")
       if retryAfterHeader != "" {
         retryAfterSeconds, err := strconv.Atoi(retryAfterHeader)
         if err != nil {
-          log.Printf("Response Error %v", retryAfterHeader)
           return []error{fmt.Errorf("Error parsing Retry-After header: %s", retryAfterHeader)}
         }
-        log.Printf("Retry on header...")
         time.Sleep(time.Duration(retryAfterSeconds) * time.Second)
       } else {
-        log.Printf("Retry Second...")
         time.Sleep(StatusCodeRetryInterval) 
       }
     } else if resp.StatusCode >= 400 {
-      log.Printf("Response Error %v", resp.StatusCode)
       return []error{fmt.Errorf("Error sending msg. Status: %v", resp.StatusCode)}
     } else {
-      log.Printf("Response Status %v", resp.StatusCode)
       return nil
     }
   }
