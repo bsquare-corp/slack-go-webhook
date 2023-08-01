@@ -1,18 +1,16 @@
 package slack
 
 import (
-  "bytes"
-  "encoding/json"
+	"bytes"
+	"encoding/json"
 	"fmt"
-  "log"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/parnurzeal/gorequest"
 )
 
 type Field struct {
@@ -73,17 +71,15 @@ func (attachment *Attachment) AddAction(action Action) *Attachment {
 	return attachment
 }
 
-func redirectPolicyFunc(req gorequest.Request, via []gorequest.Request) error {
-	return fmt.Errorf("Incorrect token (redirection)")
-}
-
 var (
-  HttpClient = &http.Client{}
-	statusCodeMap    = make(map[int]int)
-	statusCodeLock   sync.Mutex
-	statusCodeTicker *time.Ticker
-  StatusCodeTickerInterval = time.Minute
-  StatusCodeRetryInterval = time.Minute
+	HttpClient                       = &http.Client{}
+	statusCodeMap                    = make(map[int]int)
+	statusCodeLock                   sync.Mutex
+	statusCodeTicker                 *time.Ticker
+	StatusCodeTickerInterval         = time.Minute
+	StatusCodeRetryInterval          = time.Millisecond * 100
+	StatusCodeRetryIntervalIncrement = time.Millisecond * 100
+	StatusCodeRetryIntervalDecrement = time.Millisecond * 1
 )
 
 func Init() {
@@ -92,54 +88,87 @@ func Init() {
 	}
 }
 
+func MinDuration(vars ...time.Duration) time.Duration {
+	min := vars[0]
+
+	for _, i := range vars {
+		if min > i {
+			min = i
+		}
+	}
+
+	return min
+}
+
+func MaxDuration(vars ...time.Duration) time.Duration {
+	max := vars[0]
+
+	for _, i := range vars {
+		if max < i {
+			max = i
+		}
+	}
+
+	return max
+}
+
 func Send(webhookUrl string, proxy string, payload Payload) []error {
 
-  payloadJson, err := json.Marshal(payload)
-  if err != nil {
-    return []error{err}
-  }
+	payloadJson, err := json.Marshal(payload)
+	if err != nil {
+		return []error{err}
+	}
 
-  if proxy != "" {
-    proxyUrl, err := url.Parse(proxy)
-    if err != nil {
-      return []error{err} 
-    }
-    HttpClient.Transport = &http.Transport{Proxy: http.ProxyURL(proxyUrl)}
-  }
+	if proxy != "" {
+		proxyUrl, err := url.Parse(proxy)
+		if err != nil {
+			return []error{err}
+		}
+		HttpClient.Transport = &http.Transport{Proxy: http.ProxyURL(proxyUrl)}
+	}
 
-  for {
-    req, err := http.NewRequest("POST", webhookUrl, bytes.NewBuffer(payloadJson))
-    if err != nil {
-      return []error{err}
-    }
+	for {
+		req, err := http.NewRequest("POST", webhookUrl, bytes.NewBuffer(payloadJson))
+		if err != nil {
+			return []error{err}
+		}
 
-    resp, err := HttpClient.Do(req)
-    if err != nil {
-      return []error{err}
-    }
+		resp, err := HttpClient.Do(req)
+		if err != nil {
+			return []error{err}
+		}
 
+		if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
+			incrementStatusCode(resp.StatusCode)
+		}
 
-    if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
-      incrementStatusCode(resp.StatusCode) 
-    }
+		// We alway sleep between messages, but we adapt our rate.
+		time.Sleep(StatusCodeRetryInterval)
 
-    if resp.StatusCode == http.StatusTooManyRequests {
-      retryAfterHeader := resp.Header.Get("Retry-After")
-      if retryAfterHeader != "" {
-        retryAfterSeconds, err := strconv.Atoi(retryAfterHeader)
-        if err != nil {
-          return []error{fmt.Errorf("Error parsing Retry-After header: %s", retryAfterHeader)}
-        }
-        time.Sleep(time.Duration(retryAfterSeconds) * time.Second)
-      } else {
-        time.Sleep(StatusCodeRetryInterval) 
-      }
-    } else if resp.StatusCode >= 400 {
-      return []error{fmt.Errorf("Error sending msg. Status: %v", resp.StatusCode)}
-    } else {
-      return nil
-    }
-  }
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfterHeader := resp.Header.Get("Retry-After")
+			if retryAfterHeader != "" {
+				retryAfterSeconds, err := strconv.Atoi(retryAfterHeader)
+
+				if err != nil {
+					return []error{fmt.Errorf("Error parsing Retry-After header: %s", retryAfterHeader)}
+				}
+
+				StatusCodeRetryInterval = MinDuration(time.Duration(retryAfterSeconds)*time.Second, StatusCodeRetryInterval+StatusCodeRetryIntervalIncrement)
+			} else {
+				StatusCodeRetryInterval = MinDuration(4*time.Second, StatusCodeRetryInterval+StatusCodeRetryIntervalIncrement)
+			}
+
+			log.Printf("Slack HTTP failure response [StatusCodeRetryInterval=%v,StatusCodeRetryIntervalIncrement=%v,StatusCodeRetryIntervalDecrement=%v]\n", StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
+
+		} else if resp.StatusCode >= 400 {
+			return []error{fmt.Errorf("Error sending msg. Status: %v", resp.StatusCode)}
+		} else {
+			StatusCodeRetryInterval = MaxDuration(0, StatusCodeRetryInterval-StatusCodeRetryIntervalDecrement)
+			log.Printf("Slack HTTP success response [StatusCodeRetryInterval=%v,StatusCodeRetryIntervalIncrement=%v,StatusCodeRetryIntervalDecrement=%v]\n", StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
+			return nil
+		}
+	}
 }
 
 func InitialiseTicker() {
@@ -152,7 +181,7 @@ func InitialiseTicker() {
 		go func() {
 			for t := range statusCodeTicker.C {
 				reportStatusCodes(t)
-	      resetStatusCodes()
+				resetStatusCodes()
 			}
 		}()
 	}
@@ -175,6 +204,7 @@ func reportStatusCodes(tick time.Time) {
 	defer statusCodeLock.Unlock()
 
 	log.Printf("Slack HTTP response codes / min = %v (tick %v)\n", statusCodeMap, tick)
+	log.Printf("Slack HTTP response [StatusCodeRetryInterval=%v,StatusCodeRetryIntervalIncrement=%v,StatusCodeRetryIntervalDecrement=%v]\n", StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
 }
 
 func resetStatusCodes() {
