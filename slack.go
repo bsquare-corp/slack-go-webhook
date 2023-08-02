@@ -76,7 +76,7 @@ var (
 	statusCodeMap                    = make(map[int]int)
 	statusCodeLock                   sync.Mutex
 	statusCodeTicker                 *time.Ticker
-	StatusCodeTickerInterval         = time.Minute
+	StatusCodeTickerInterval         = time.Minute * 60
 	StatusCodeRetryInterval          = time.Millisecond * 100
 	StatusCodeRetryIntervalIncrement = time.Millisecond * 100
 	StatusCodeRetryIntervalDecrement = time.Millisecond * 1
@@ -176,7 +176,7 @@ func InitialiseTicker() {
 	defer statusCodeLock.Unlock()
 
 	if statusCodeTicker == nil {
-		log.Printf("Initialising status code ticker (1/min)\n")
+		log.Printf("Initialising status code ticker (1/hr)\n")
 		statusCodeTicker = time.NewTicker(StatusCodeTickerInterval)
 		go func() {
 			for t := range statusCodeTicker.C {
@@ -203,7 +203,7 @@ func reportStatusCodes(tick time.Time) {
 	statusCodeLock.Lock()
 	defer statusCodeLock.Unlock()
 
-	log.Printf("Slack HTTP response codes / min = %v (tick %v)\n", statusCodeMap, tick)
+	log.Printf("Slack HTTP response codes / hr = %v (tick %v)\n", statusCodeMap, tick)
 	log.Printf("Slack HTTP response [StatusCodeRetryInterval=%v,StatusCodeRetryIntervalIncrement=%v,StatusCodeRetryIntervalDecrement=%v]\n", StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
 }
 
