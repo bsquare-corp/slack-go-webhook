@@ -66,5 +66,7 @@ func TestSend(t *testing.T) {
 	}
 
 	time.Sleep(3 * StatusCodeTickerInterval)
+	Exit()
+	time.Sleep(3 * StatusCodeTickerInterval)
 
 }

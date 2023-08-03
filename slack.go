@@ -72,11 +72,14 @@ func (attachment *Attachment) AddAction(action Action) *Attachment {
 }
 
 var (
-	HttpClient                       = &http.Client{}
-	statusCodeMap                    = make(map[int]int)
-	statusCodeLock                   sync.Mutex
-	statusCodeTicker                 *time.Ticker
-	StatusCodeTickerInterval         = time.Minute * 60
+	// Private
+	statusCodeMap        = make(map[int]int)
+	statusCodeLock       sync.Mutex
+	statusCodeTicker     *time.Ticker
+	statusCodeTickerDone = make(chan bool)
+	HttpClient           = &http.Client{}
+	// Public
+	StatusCodeTickerInterval         = time.Hour
 	StatusCodeRetryInterval          = time.Millisecond * 100
 	StatusCodeRetryIntervalIncrement = time.Millisecond * 100
 	StatusCodeRetryIntervalDecrement = time.Millisecond * 1
@@ -84,7 +87,13 @@ var (
 
 func Init() {
 	if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
-		InitialiseTicker()
+		StartTicker()
+	}
+}
+
+func Exit() {
+	if os.Getenv("SLACK_GO_WEBHOOK_DEBUG") != "" {
+		StopTicker()
 	}
 }
 
@@ -159,7 +168,6 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 				StatusCodeRetryInterval = MinDuration(4*time.Second, StatusCodeRetryInterval+StatusCodeRetryIntervalIncrement)
 			}
 
-
 		} else if resp.StatusCode >= 400 {
 			return []error{fmt.Errorf("Error sending msg. Status: %v", resp.StatusCode)}
 		} else {
@@ -169,20 +177,32 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 	}
 }
 
-func InitialiseTicker() {
+func StartTicker() {
 	statusCodeLock.Lock()
 	defer statusCodeLock.Unlock()
 
 	if statusCodeTicker == nil {
-		log.Printf("Initialising status code ticker (1/hr)\n")
+		log.Printf("Initialising status code ticker (%v)\n", StatusCodeTickerInterval)
 		statusCodeTicker = time.NewTicker(StatusCodeTickerInterval)
 		go func() {
-			for t := range statusCodeTicker.C {
-				reportStatusCodes(t)
-				resetStatusCodes()
+			for {
+				select {
+				case <-statusCodeTickerDone:
+					log.Printf("Exiting status code ticker (%v)",StatusCodeTickerInterval)
+					return
+				case t := <-statusCodeTicker.C:
+					reportStatusCodes(t)
+					resetStatusCodes()
+				}
 			}
 		}()
 	}
+}
+
+func StopTicker() {
+	log.Printf("Stopping status code ticker (%v)", StatusCodeTickerInterval)
+	statusCodeTicker.Stop()
+	statusCodeTickerDone <- true
 }
 
 func incrementStatusCode(code int) {
@@ -201,8 +221,8 @@ func reportStatusCodes(tick time.Time) {
 	statusCodeLock.Lock()
 	defer statusCodeLock.Unlock()
 
-	log.Printf("Slack HTTP response codes / hr = %v (tick %v)\n", statusCodeMap, tick)
-	log.Printf("Slack HTTP response [StatusCodeRetryInterval=%v,StatusCodeRetryIntervalIncrement=%v,StatusCodeRetryIntervalDecrement=%v]\n", StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
+	log.Printf("Slack HTTP response codes = %v (StatusCodeTickerInverval=%v, StatusCodeRetryInterval=%v, StatusCodeRetryIntervalIncrement=%v, StatusCodeRetryIntervalDecrement=%v)\n",
+		statusCodeMap, StatusCodeTickerInterval, StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
 }
 
 func resetStatusCodes() {
