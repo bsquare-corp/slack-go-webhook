@@ -159,13 +159,11 @@ func Send(webhookUrl string, proxy string, payload Payload) []error {
 				StatusCodeRetryInterval = MinDuration(4*time.Second, StatusCodeRetryInterval+StatusCodeRetryIntervalIncrement)
 			}
 
-			log.Printf("Slack HTTP failure response [StatusCodeRetryInterval=%v,StatusCodeRetryIntervalIncrement=%v,StatusCodeRetryIntervalDecrement=%v]\n", StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
 
 		} else if resp.StatusCode >= 400 {
 			return []error{fmt.Errorf("Error sending msg. Status: %v", resp.StatusCode)}
 		} else {
 			StatusCodeRetryInterval = MaxDuration(0, StatusCodeRetryInterval-StatusCodeRetryIntervalDecrement)
-			log.Printf("Slack HTTP success response [StatusCodeRetryInterval=%v,StatusCodeRetryIntervalIncrement=%v,StatusCodeRetryIntervalDecrement=%v]\n", StatusCodeRetryInterval, StatusCodeRetryIntervalIncrement, StatusCodeRetryIntervalDecrement)
 			return nil
 		}
 	}
